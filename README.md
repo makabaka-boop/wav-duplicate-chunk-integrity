@@ -19,9 +19,13 @@
 | 错误码 | 含义 |
 | --- | --- |
 | `NOT_WAV` | 文件不是有效的 WAV（缺 RIFF/WAVE 标识等） |
-| `CORRUPT` | WAV 损坏或被截断（RIFF/区块尺寸不一致、fmt 字段非法等） |
+| `CORRUPT` | WAV 损坏、被截断或结构歧义（RIFF/区块尺寸不一致、fmt 字段非法、重复 fmt 区块、多个 data 区块等） |
 | `NO_TRACK` | 不含可读取音轨（无 data 区块、0 帧、解码后无声道） |
 | `DECODE_FAILED` | 浏览器解码失败或扫描异常 |
+
+**唯一音频解释**：同一文件的结构校验、削波扫描与浏览器试听必须落在同一段音频字节上。
+因此含**重复 fmt 区块**或**多个 data 区块**的文件（即使所有区块都在声明的 RIFF 范围内）
+一律按 `CORRUPT` 拒绝——无法得到唯一音频解释的文件不产生任何可放行结果。
 
 ## 局部视窗
 
@@ -56,11 +60,11 @@ npx playwright test            # Playwright 端到端（自动 build + preview�
 
 - Vitest 覆盖：阈值边界（含 0.999 恰为阈值、−0.999）、连续帧（1/2/3 帧）、
   合并边界（间隔 1/2/3 帧）、换算边界（0.5 向上、8000Hz/44100Hz 取整）、
-  WAV 头损坏分类、解码失败/无音轨链路，
+  WAV 头损坏分类（含重复 fmt / 多 data 区块的结构歧义拒绝）、解码失败/无音轨链路，
   以及局部视窗的居中、首尾平移、等长回退与非法输入解析。
 - Playwright 覆盖：本地 WAV 载入、双声道仅实际削波声道高亮、
   点击“定位首个异常”与区间行定位、结论（需重采/可交付）、
-  截断损坏/无音轨/非 WAV 的失败提示，
+  截断损坏/无音轨/非 WAV/结构歧义（多 data、重复 fmt）的失败提示，
   以及局部视窗四场景（中部长录音跨声道同步、边界削波保持指定宽度、
   短录音提示整轨回退、非法输入提示后原结论与区间仍可见）。
 
@@ -84,7 +88,7 @@ docker compose --profile verify run --rm verify
 src/audio/        纯函数核心：时间换算、扫描合并、WAV 头校验、本地解码、视窗范围
 src/components/   Waveform（Canvas 2D）、SegmentList
 src/App.tsx       页面：载入、结论、指标、声道卡片、定位试听、局部视窗
-tests/unit/       Vitest（73 例）
+tests/unit/       Vitest（79 例）
 tests/fixtures/   内存 WAV 字节构造器
-e2e/              Playwright（12 例，素材均浏览器内现场生成）
+e2e/              Playwright（16 例，素材均浏览器内现场生成）
 ```

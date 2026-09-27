@@ -58,6 +58,33 @@ async function loadFile(page: Page, buffer: Buffer, name: string): Promise<void>
   await chooser.setFiles({ name, mimeType: 'audio/wav', buffer });
 }
 
+/**
+ * 在已有合法 WAV 尾部追加一个 RIFF 区块并重写 RIFF 声明尺寸，
+ * 保证追加区块也位于声明范围内（不是截断文件），用于构造结构歧义素材。
+ */
+function appendRiffChunk(buf: Buffer, id: string, body: Buffer): Buffer {
+  const chunk = Buffer.alloc(8 + body.length);
+  chunk.write(id, 0, 'ascii');
+  chunk.writeUInt32LE(body.length, 4);
+  body.copy(chunk, 8);
+  const out = Buffer.concat([buf, chunk]);
+  out.writeUInt32LE(buf.length - 8 + chunk.length, 4);
+  return out;
+}
+
+/** 16 字节 fmt 区块体（PCM） */
+function fmtBody(channels: number, sampleRate: number, bits = 16): Buffer {
+  const blockAlign = channels * Math.ceil(bits / 8);
+  const b = Buffer.alloc(16);
+  b.writeUInt16LE(1, 0); // PCM
+  b.writeUInt16LE(channels, 2);
+  b.writeUInt32LE(sampleRate, 4);
+  b.writeUInt32LE(sampleRate * blockAlign, 8);
+  b.writeUInt16LE(blockAlign, 12);
+  b.writeUInt16LE(bits, 14);
+  return b;
+}
+
 /** 统计画布中红色削波高亮像素数（rgba(255,77,79,*) 底纹/描边） */
 async function countRedPixels(page: Page, canvasIndex: number): Promise<number> {
   return page.evaluate((idx) => {
@@ -252,4 +279,44 @@ test('非 WAV 文件：显示不是有效 WAV 且不生成结果', async ({ page
   await expect(page.getByTestId('error-panel')).toBeVisible();
   await expect(page.getByTestId('error-title')).toContainText('NOT_WAV');
   await expect(page.getByTestId('summary-panel')).toHaveCount(0);
+});
+
+test('多个 data 区块的 WAV：音频解释不唯一，按损坏拒绝且不产生可放行结果', async ({ page }) => {
+  await page.goto('/');
+  // 第一段 data 含削波（帧 10..12），追加的第二段 data 为静音，
+  // 两段都在声明的 RIFF 范围内：结构校验、扫描与试听可能各取一段
+  const base = buildWav({
+    channels: 1,
+    sampleRate: 8000,
+    interleaved: makeInterleaved(1, 80, [{ start: 10, end: 12, targets: [0] }])
+  });
+  const wav = appendRiffChunk(base, 'data', Buffer.alloc(160));
+  await loadFile(page, wav, 'ambiguous-double-data.wav');
+
+  await expect(page.getByTestId('error-panel')).toBeVisible();
+  await expect(page.getByTestId('error-title')).toContainText('CORRUPT');
+  await expect(page.getByTestId('error-detail')).toContainText('多个 data 区块');
+  // 不生成任何结果：无结论、无汇总、无试听基线
+  await expect(page.getByTestId('summary-panel')).toHaveCount(0);
+  await expect(page.getByTestId('verdict')).toHaveCount(0);
+  await expect(page.getByTestId('audio-player')).toHaveCount(0);
+});
+
+test('重复 fmt 区块的 WAV：格式解释不唯一，按损坏拒绝且不产生可放行结果', async ({ page }) => {
+  await page.goto('/');
+  // 合法单声道文件尾部追加第二个 fmt 区块（声明为立体声），仍在 RIFF 声明范围内
+  const base = buildWav({
+    channels: 1,
+    sampleRate: 8000,
+    interleaved: makeInterleaved(1, 80, [{ start: 10, end: 12, targets: [0] }])
+  });
+  const wav = appendRiffChunk(base, 'fmt ', fmtBody(2, 8000));
+  await loadFile(page, wav, 'ambiguous-double-fmt.wav');
+
+  await expect(page.getByTestId('error-panel')).toBeVisible();
+  await expect(page.getByTestId('error-title')).toContainText('CORRUPT');
+  await expect(page.getByTestId('error-detail')).toContainText('多个 fmt 区块');
+  await expect(page.getByTestId('summary-panel')).toHaveCount(0);
+  await expect(page.getByTestId('verdict')).toHaveCount(0);
+  await expect(page.getByTestId('audio-player')).toHaveCount(0);
 });

@@ -158,6 +158,31 @@ describe('loadAndScanWav 本地解码全链路', () => {
     ).rejects.toMatchObject({ code: 'NOT_WAV' });
   });
 
+  it('多个 data 区块的 WAV → CORRUPT，不进入解码、不生成试听 URL', async () => {
+    // 结构歧义文件必须在头校验阶段被拒绝，保证扫描/试听不会各取一段字节
+    behavior = { kind: 'error', message: 'should not be called' };
+    const bytes = buildWavBytes({
+      frameCount: 8,
+      extraChunks: [{ id: 'data', size: 4 }]
+    });
+    const { loadAndScanWav } = await import('../../src/audio/decoder');
+    await expect(
+      loadAndScanWav(new FakeFile('dup-data.wav', bytes) as unknown as File)
+    ).rejects.toMatchObject({ code: 'CORRUPT' });
+  });
+
+  it('重复 fmt 区块的 WAV → CORRUPT，不进入解码、不生成试听 URL', async () => {
+    behavior = { kind: 'error', message: 'should not be called' };
+    const bytes = buildWavBytes({
+      frameCount: 8,
+      extraChunks: [{ id: 'fmt ', size: 16 }]
+    });
+    const { loadAndScanWav } = await import('../../src/audio/decoder');
+    await expect(
+      loadAndScanWav(new FakeFile('dup-fmt.wav', bytes) as unknown as File)
+    ).rejects.toMatchObject({ code: 'CORRUPT' });
+  });
+
   it('本地文件读取失败 → CORRUPT', async () => {
     const bytes = buildWavBytes({ frameCount: 4 });
     const file = new FakeFile(

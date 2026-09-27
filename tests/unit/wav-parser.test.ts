@@ -132,6 +132,40 @@ describe('WAV 头解析', () => {
     );
   });
 
+  it('重复 fmt 区块（均在声明的 RIFF 范围内）→ CORRUPT，音频格式解释不唯一', () => {
+    const bytes = buildWavBytes({ extraChunks: [{ id: 'fmt ', size: 16 }] });
+    expectCode(() => parseWavHeader(bytes), 'CORRUPT');
+    expect(() => parseWavHeader(bytes)).toThrow('多个 fmt 区块');
+  });
+
+  it('多个 data 区块（均在声明的 RIFF 范围内）→ CORRUPT，音频数据范围不唯一', () => {
+    const bytes = buildWavBytes({ extraChunks: [{ id: 'data', size: 4 }] });
+    expectCode(() => parseWavHeader(bytes), 'CORRUPT');
+    expect(() => parseWavHeader(bytes)).toThrow('多个 data 区块');
+  });
+
+  it('首个 data 为 0 帧且存在第二个 data 区块 → 按 CORRUPT 拒绝（而非 NO_TRACK）', () => {
+    // 结构歧义优先于空数据判定：不得因首块为空就按“无音轨”放行式报错
+    const bytes = buildWavBytes({
+      dataBytesOverride: 0,
+      extraChunks: [{ id: 'data', size: 4 }]
+    });
+    expectCode(() => parseWavHeader(bytes), 'CORRUPT');
+  });
+
+  it('单个 fmt + 单个 data 之间夹其它区块仍解析成功', () => {
+    const info = parseWavHeader(
+      buildWavBytes({
+        extraChunks: [
+          { id: 'LIST', size: 4 },
+          { id: 'cue ', size: 4 }
+        ],
+        frameCount: 6
+      })
+    );
+    expect(info.frameCount).toBe(6);
+  });
+
   it('缺 fmt 区块 → CORRUPT', () => {
     expectCode(() => parseWavHeader(buildWavBytes({ fmtTag: 'xxxx' })), 'CORRUPT');
   });

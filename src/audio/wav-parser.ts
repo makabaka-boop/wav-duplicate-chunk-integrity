@@ -2,6 +2,10 @@
  * WAV(RIFF) 头解析：在交给 Web Audio 解码前先做结构校验，
  * 以便把“不是 WAV / 文件损坏 / 无音轨”区分成明确错误原因。
  * 纯字节解析，不做任何网络访问。
+ *
+ * 唯一解释约束：重复 fmt 区块或多个 data 区块会让结构校验、
+ * 削波扫描与浏览器试听各取一段字节作出不同结论，一律按 CORRUPT
+ * 拒绝——无法得到唯一音频解释的文件不生成任何可放行结果。
  */
 
 import { WavError } from './types';
@@ -51,6 +55,8 @@ export function parseWavHeader(bytes: ArrayBuffer): WavHeaderInfo {
     bitsPerSample: number;
   } | null = null;
   let dataBytes = -1;
+  let fmtCount = 0;
+  let dataCount = 0;
 
   let offset = 12;
   while (offset + 8 <= bytes.byteLength) {
@@ -65,6 +71,14 @@ export function parseWavHeader(bytes: ArrayBuffer): WavHeaderInfo {
     }
 
     if (chunkId === 'fmt ') {
+      fmtCount++;
+      if (fmtCount > 1) {
+        // 重复 fmt：本解析器与浏览器解码/试听可能各取其一，音频解释不唯一
+        throw new WavError(
+          'CORRUPT',
+          '文件包含多个 fmt 区块，无法确定唯一的音频格式解释，文件已损坏或不规范'
+        );
+      }
       if (chunkSize < 16) {
         throw new WavError('CORRUPT', 'fmt 区块长度不足 16 字节，文件已损坏');
       }
@@ -77,6 +91,14 @@ export function parseWavHeader(bytes: ArrayBuffer): WavHeaderInfo {
         bitsPerSample: view.getUint16(bodyStart + 14, true)
       };
     } else if (chunkId === 'data') {
+      dataCount++;
+      if (dataCount > 1) {
+        // 多个 data：扫描范围与试听内容可能落在不同区块，音频解释不唯一
+        throw new WavError(
+          'CORRUPT',
+          '文件包含多个 data 区块，无法确定唯一的音频数据范围，文件已损坏或不规范'
+        );
+      }
       dataBytes = chunkSize;
     }
 
